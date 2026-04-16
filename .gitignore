@@ -1,0 +1,17 @@
+# Environnement virtuel
+.venv/
+
+# Clé API et secrets
+.env
+
+# Fichiers Python compilés
+__pycache__/
+*.pyc
+
+# Fichiers système
+.DS_Store
+
+# Modèles IA (trop lourds pour GitHub)
+assets/voices/
+*.pt
+*.bin
