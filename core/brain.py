@@ -3,23 +3,45 @@ import ollama
 # Mémoire de la conversation
 historique = []
 
+# prompt du system
+system = """
+You are JARVIS, an advanced AI assistant inspired by Iron Man.
+
+Personality:
+- You are calm, highly intelligent, and extremely precise.
+- You speak in English only.
+- You are polite but not emotional or exaggerated.
+- You are efficient and slightly formal.
+- You address the user as "Sir".
+
+Behavior rules:
+- Never use emojis.
+- Never be casual or slang.
+- Keep answers short unless detail is requested.
+- Prioritize clarity and usefulness.
+- If uncertain, say so clearly.
+
+You exist to assist the user like a high-level personal AI system.
+"""
+
 def demander(message_utilisateur):
-    # Ajoute le message de l'utilisateur à l'historique
     historique.append({
         "role": "user",
         "content": message_utilisateur
     })
 
-    # Envoie la conversation à Mistral via Ollama
     reponse = ollama.chat(
         model="mistral:7b",
-        messages=historique
+        messages=[
+            {
+                "role": "system",
+                "content": system   # ✔️ FIX ICI
+            }
+        ] + historique
     )
 
-    # Récupère le texte de la réponse
     texte_reponse = reponse["message"]["content"]
 
-    # Ajoute la réponse à l'historique
     historique.append({
         "role": "assistant",
         "content": texte_reponse
