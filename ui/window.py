@@ -491,20 +491,26 @@ def launch():
     win = JarvisWindow()
 
     # Connexion signal → worker → réponse
+    workers = []  # garde les workers en mémoire
+
     def on_user_message(text: str):
         worker = BrainWorker(text)
+        workers.append(worker)
 
         def on_response(reponse: str):
-            win.add_message("Jarvis", reponse)
-            win.set_state("speaking")
+                if worker in workers:
+                   workers.remove(worker)
+         
+                win.add_message("Jarvis", reponse)
+                win.set_state("speaking")
 
             # Voix dans un thread séparé
-            from core.voice import parler
-            import threading
-            def speak_then_idle():
-                parler(reponse)
-                win.set_state("idle")
-            threading.Thread(target=speak_then_idle, daemon=True).start()
+                from core.voice import parler
+                import threading
+                def speak_then_idle():
+                    parler(reponse)
+                    win.set_state("idle")
+                threading.Thread(target=speak_then_idle, daemon=True).start()
 
         worker.response_ready.connect(on_response)
         worker.start()
