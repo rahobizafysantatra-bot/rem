@@ -31,11 +31,11 @@ def demander(message_utilisateur):
     })
 
     reponse = ollama.chat(
-        model="mistral:7b",
+        model="qwen2.5:3b",
         messages=[
             {
                 "role": "system",
-                "content": system   # ✔️ FIX ICI
+                "content": system   
             }
         ] + historique
     )
