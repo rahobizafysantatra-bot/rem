@@ -173,7 +173,7 @@ class JarvisWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("JARVIS")
+        self.setWindowTitle("REM")
         self.resize(1100, 700)
 
         self._theme_name = "dark"
@@ -208,7 +208,7 @@ class JarvisWindow(QMainWindow):
         lay = QHBoxLayout(bar)
         lay.setContentsMargins(20, 0, 20, 0)
 
-        title = QLabel("JARVIS")
+        title = QLabel("REM")
         title.setObjectName("title")
 
         self._clock = QLabel()
