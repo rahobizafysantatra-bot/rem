@@ -264,7 +264,7 @@ class JarvisWindow(QMainWindow):
 
         self._input = QLineEdit()
         self._input.setObjectName("input")
-        self._input.setPlaceholderText("Send a message to Jarvis...")
+        self._input.setPlaceholderText("Send a message to REM...")
         self._input.returnPressed.connect(self._on_send)
 
         send_btn = QPushButton("Send")
@@ -290,7 +290,7 @@ class JarvisWindow(QMainWindow):
         # Redessine l'historique existant avec les couleurs du thème actuel
         t = THEMES[self._theme_name]
         self._chat.document().setDefaultStyleSheet(f"""
-            .jarvis {{ color: {t['accent']}; font-weight: 600; }}
+            .rem {{ color: {t['accent']}; font-weight: 600; }}
             .you {{ color: {t['text_dim']}; font-weight: 600; }}
             .msg {{ color: {t['text']}; }}
         """)
@@ -315,7 +315,7 @@ class JarvisWindow(QMainWindow):
     # ── API publique (compatible avec main.py / brain.py / voice.py) ──────────
     def add_message(self, sender: str, text: str):
         """Ajoute un message dans le chat (sélectionnable et copiable)."""
-        css_class = "jarvis" if sender.upper() == "JARVIS" else "you"
+        css_class = "rem" if sender.upper() == "REM" else "you"
         safe_text = (
             text.replace("&", "&amp;")
                 .replace("<", "&lt;")
@@ -365,7 +365,7 @@ def launch():
         worker = BrainWorker(text)
 
         def on_response(reponse: str):
-            win.add_message("Jarvis", reponse)
+            win.add_message("Rem", reponse)
             win.set_state("speaking")
 
             from core.voice import parler
@@ -381,7 +381,7 @@ def launch():
     win.sig_user_message.connect(on_user_message)
 
     welcome = "Welcome sir. Systems online. How can I assist you today?"
-    win.add_message("Jarvis", welcome)
+    win.add_message("Rem", welcome)
 
     import threading
     from core.voice import parler
