@@ -1,5 +1,5 @@
 """
-JARVIS - Interface graphique PyQt6 (v2)
+REM - Interface graphique PyQt6 (v2)
 Design minimaliste, chat agrandi et copiable, mascotte kawaii animée,
 thème clair / sombre, indicateur de réflexion animé, bouton Quit avec
 message d'adieu, et synchronisation texte/voix.
@@ -164,7 +164,7 @@ class JarvisWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("JARVIS")
+        self.setWindowTitle("REM")
         self.resize(1100, 700)
 
         self._theme_name = "dark"
@@ -210,7 +210,7 @@ class JarvisWindow(QMainWindow):
         lay = QHBoxLayout(bar)
         lay.setContentsMargins(20, 0, 20, 0)
 
-        title = QLabel("JARVIS")
+        title = QLabel("REM")
         title.setObjectName("title")
 
         self._clock = QLabel()
@@ -278,7 +278,7 @@ class JarvisWindow(QMainWindow):
 
         self._input = QLineEdit()
         self._input.setObjectName("input")
-        self._input.setPlaceholderText("Send a message to Jarvis...")
+        self._input.setPlaceholderText("Send a message to Rem...")
         self._input.returnPressed.connect(self._on_send)
 
         send_btn = QPushButton("Send")
@@ -307,7 +307,7 @@ class JarvisWindow(QMainWindow):
     def _render_chat_stylesheet(self):
         t = THEMES[self._theme_name]
         self._chat.document().setDefaultStyleSheet(f"""
-            .jarvis {{ color: {t['accent']}; font-weight: 600; }}
+            .rem {{ color: {t['accent']}; font-weight: 600; }}
             .you {{ color: {t['text_dim']}; font-weight: 600; }}
             .msg {{ color: {t['text']}; }}
             .thinking {{ color: {t['text_dim']}; font-style: italic; }}
@@ -361,7 +361,7 @@ class JarvisWindow(QMainWindow):
     def _render_chat(self):
         blocks = []
         for sender, text in self._messages:
-            css_class = "jarvis" if sender.upper() == "JARVIS" else "you"
+            css_class = "rem" if sender.upper() == "REM" else "you"
             blocks.append(
                 f'<p><span class="{css_class}">{sender.upper()}</span><br>'
                 f'<span class="msg">{self._escape(text)}</span></p>'
@@ -370,7 +370,7 @@ class JarvisWindow(QMainWindow):
         if self._thinking:
             dots = "." * self._thinking_dots
             blocks.append(
-                '<p><span class="jarvis">REM</span><br>'
+                '<p><span class="rem">REM</span><br>'
                 f'<span class="thinking">réfléchit{dots}</span></p>'
             )
 
@@ -412,7 +412,7 @@ class JarvisWindow(QMainWindow):
             def on_synth_done(ok: bool):
                 if synth_worker in self._active_workers:
                     self._active_workers.remove(synth_worker)
-                self.add_message("Jarvis", GOODBYE_TEXT)
+                self.add_message("Rem", GOODBYE_TEXT)
 
                 import threading
                 from core.voice import play
@@ -425,8 +425,7 @@ class JarvisWindow(QMainWindow):
             synth_worker.done.connect(on_synth_done)
             synth_worker.start()
         else:
-            self.add_message("Jarvis", GOODBYE_TEXT)
-            QTimer.singleShot(700, self.sig_close_now.emit)
+                self.add_message("Rem", GOODBYE_TEXT)
 
     def _do_close_now(self):
         self._ready_to_close = True
@@ -484,7 +483,7 @@ def launch():
                 def on_synth_done(ok: bool):
                     if synth_worker in win._active_workers:
                         win._active_workers.remove(synth_worker)
-                    win.add_message("Jarvis", reponse)
+                    win.add_message("Rem", reponse)
                     win.set_state("speaking")
 
                     import threading
@@ -498,7 +497,7 @@ def launch():
                 synth_worker.done.connect(on_synth_done)
                 synth_worker.start()
             else:
-                win.add_message("Jarvis", reponse)
+                win.add_message("Rem", reponse)
                 win.set_state("idle")
 
         worker.response_ready.connect(on_response)
@@ -516,7 +515,7 @@ def launch():
         def on_welcome_synth(ok: bool):
             if welcome_worker in win._active_workers:
                 win._active_workers.remove(welcome_worker)
-            win.add_message("Jarvis", welcome)
+            win.add_message("Rem", welcome)
 
             import threading
             from core.voice import play
@@ -530,8 +529,7 @@ def launch():
         welcome_worker.done.connect(on_welcome_synth)
         welcome_worker.start()
     else:
-        win.add_message("Jarvis", welcome)
-
+            win.add_message("Rem", welcome)
     win.show()
     sys.exit(app.exec())
 
