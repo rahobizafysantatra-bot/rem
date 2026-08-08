@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
     QScrollArea, QListWidget, QPlainTextEdit
 )
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QSize
-from PyQt6.QtGui import QMovie, QFont
+from PyQt6.QtGui import QMovie, QFont, QSyntaxHighlighter, QTextCharFormat, QColor
 
 
 # ─── Emplacement des assets de la mascotte ─────────────────────────────────
@@ -180,6 +180,112 @@ def escape_html(text: str) -> str:
     )
 
 
+# ─── Coloration syntaxique façon VS Code Dark+ ───────────────────────────────
+LANGUAGE_KEYWORDS = {
+    "python": [
+        "def", "class", "return", "if", "elif", "else", "for", "while", "in",
+        "import", "from", "as", "with", "try", "except", "finally", "raise",
+        "pass", "break", "continue", "lambda", "yield", "global", "nonlocal",
+        "not", "and", "or", "is", "None", "True", "False", "self", "async",
+        "await", "assert", "del", "print",
+    ],
+    "javascript": [
+        "function", "return", "if", "else", "for", "while", "do", "switch",
+        "case", "break", "continue", "var", "let", "const", "new", "this",
+        "class", "extends", "import", "export", "default", "from", "async",
+        "await", "try", "catch", "finally", "throw", "typeof", "instanceof",
+        "null", "undefined", "true", "false", "of", "in",
+    ],
+    "bash": [
+        "if", "then", "else", "elif", "fi", "for", "while", "do", "done",
+        "case", "esac", "function", "return", "echo", "export", "local",
+        "in", "break", "continue",
+    ],
+    "java": [
+        "public", "private", "protected", "class", "static", "void", "new",
+        "return", "if", "else", "for", "while", "do", "switch", "case",
+        "break", "continue", "import", "package", "extends", "implements",
+        "try", "catch", "finally", "throw", "throws", "this", "super",
+        "null", "true", "false", "int", "String", "boolean", "double",
+        "float", "long", "final", "interface", "enum",
+    ],
+    "c": [
+        "int", "char", "float", "double", "void", "return", "if", "else",
+        "for", "while", "do", "switch", "case", "break", "continue",
+        "struct", "typedef", "const", "static", "sizeof", "include",
+        "define", "NULL",
+    ],
+    "sql": [
+        "SELECT", "FROM", "WHERE", "INSERT", "INTO", "VALUES", "UPDATE",
+        "SET", "DELETE", "CREATE", "TABLE", "ALTER", "DROP", "JOIN", "ON",
+        "AND", "OR", "NOT", "NULL", "PRIMARY", "KEY", "FOREIGN",
+        "REFERENCES", "ORDER", "BY", "GROUP", "HAVING", "AS", "DISTINCT",
+    ],
+}
+LANGUAGE_KEYWORDS["py"] = LANGUAGE_KEYWORDS["python"]
+LANGUAGE_KEYWORDS["js"] = LANGUAGE_KEYWORDS["javascript"]
+LANGUAGE_KEYWORDS["ts"] = LANGUAGE_KEYWORDS["typescript"] = LANGUAGE_KEYWORDS["javascript"]
+LANGUAGE_KEYWORDS["sh"] = LANGUAGE_KEYWORDS["bash"]
+LANGUAGE_KEYWORDS["cpp"] = LANGUAGE_KEYWORDS["c++"] = LANGUAGE_KEYWORDS["c"]
+
+HASH_COMMENT_LANGS = {"python", "py", "bash", "sh", "yaml", "yml", "ruby", "rb"}
+
+
+class CodeHighlighter(QSyntaxHighlighter):
+    """
+    Coloration syntaxique légère (mots-clés, chaînes, nombres, fonctions,
+    commentaires) inspirée du thème VS Code Dark+. Volontairement simple
+    (regex par ligne, pas de vrai tokenizer) mais suffisante pour rendre
+    le code lisible dans le chat.
+    """
+
+    def __init__(self, document, language: str = ""):
+        super().__init__(document)
+        self.language = (language or "").lower()
+        self._rules = []
+        self._build_rules()
+
+    def _fmt(self, color, bold=False, italic=False):
+        f = QTextCharFormat()
+        f.setForeground(QColor(color))
+        if bold:
+            f.setFontWeight(QFont.Weight.Bold)
+        if italic:
+            f.setFontItalic(True)
+        return f
+
+    def _build_rules(self):
+        keywords = LANGUAGE_KEYWORDS.get(self.language, [])
+        if keywords:
+            pattern = r'\b(' + '|'.join(re.escape(k) for k in keywords) + r')\b'
+            self._rules.append((re.compile(pattern), self._fmt("#569cd6", bold=True)))
+
+        # nombres
+        self._rules.append((re.compile(r'\b\d+\.?\d*\b'), self._fmt("#b5cea8")))
+
+        # appels de fonction : mot suivi de "("
+        self._rules.append((re.compile(r'\b[A-Za-z_]\w*(?=\()'), self._fmt("#dcdcaa")))
+
+        # décorateurs / annotations (@quelquechose)
+        self._rules.append((re.compile(r'@\w+'), self._fmt("#c586c0")))
+
+        # chaînes de caractères (appliquées après pour écraser le reste)
+        self._rules.append((re.compile(r'(\".*?\"|\'.*?\'|`.*?`)'), self._fmt("#ce9178")))
+
+        # commentaires (appliqués en dernier, priment sur tout le reste)
+        if self.language in HASH_COMMENT_LANGS:
+            comment_re = re.compile(r'#.*')
+        else:
+            comment_re = re.compile(r'//.*')
+        self._rules.append((comment_re, self._fmt("#6a9955", italic=True)))
+
+    def highlightBlock(self, text):
+        for pattern, fmt in self._rules:
+            for m in pattern.finditer(text):
+                start, end = m.span()
+                self.setFormat(start, end - start, fmt)
+
+
 # ─── Bloc de code avec bouton copier ──────────────────────────────────────────
 class CodeBlockWidget(QFrame):
     """Bloc de code façon IA moderne : fond sombre + bouton copier."""
@@ -233,6 +339,8 @@ class CodeBlockWidget(QFrame):
         mono_font.setStyleHint(QFont.StyleHint.Monospace)
         mono_font.setPointSize(10)
         body.setFont(mono_font)
+
+        self._highlighter = CodeHighlighter(body.document(), language)
 
         line_count = max(1, self.code.count("\n") + 1)
         line_height = body.fontMetrics().lineSpacing()
