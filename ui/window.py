@@ -1,18 +1,19 @@
 """
-REM - Interface graphique PyQt6 (v2)
-Design minimaliste, chat agrandi et copiable, mascotte kawaii animée,
-thème clair / sombre, indicateur de réflexion animé, bouton Quit avec
-message d'adieu, et synchronisation texte/voix.
+JARVIS / REM - Interface graphique PyQt6 (v3)
+Sidebar avec historique de conversations + nouvelle conversation,
+blocs de code avec bouton copier, indicateur de reflexion anime,
+theme clair/sombre, mascotte kawaii, synchro texte/voix, bouton Quit.
 """
 
+import re
 import sys
 from pathlib import Path
 from datetime import datetime
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QLineEdit, QPushButton, QTextBrowser, QSplitter, QFrame,
-    QSizePolicy
+    QLabel, QLineEdit, QPushButton, QSplitter, QFrame, QSizePolicy,
+    QScrollArea, QListWidget, QPlainTextEdit
 )
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QSize
 from PyQt6.QtGui import QMovie, QFont
@@ -34,6 +35,7 @@ FALLBACK_FACES = {
 }
 
 GOODBYE_TEXT = "Goodbye, sir."
+ASSISTANT_NAME = "Rem"
 
 
 THEMES = {
@@ -65,6 +67,10 @@ def build_stylesheet(t: dict) -> str:
         color: {t['text']};
         font-family: 'Segoe UI', 'Inter', sans-serif;
     }}
+    QWidget#sidebar {{
+        background: {t['bg_alt']};
+        border-right: 1px solid {t['border']};
+    }}
     QFrame#topBar, QFrame#inputBar {{
         background: {t['bg_alt']};
         border: none;
@@ -85,11 +91,9 @@ def build_stylesheet(t: dict) -> str:
         letter-spacing: 1px;
         color: {t['text_dim']};
     }}
-    QTextBrowser#chat {{
+    QScrollArea#chatScroll {{
         background: {t['bg']};
         border: none;
-        padding: 12px;
-        font-size: 13px;
     }}
     QLineEdit#input {{
         background: {t['bg']};
@@ -118,13 +122,201 @@ def build_stylesheet(t: dict) -> str:
         background: rgba(239,68,68,0.12);
         border-color: #ef4444;
     }}
+    QPushButton#newChatBtn {{
+        text-align: left;
+        font-weight: 600;
+    }}
     QSplitter::handle {{
         background: {t['border']};
         width: 1px;
     }}
+    QListWidget {{
+        background: transparent;
+        border: none;
+        font-size: 12px;
+        color: {t['text']};
+        outline: none;
+    }}
+    QListWidget::item {{
+        padding: 9px 10px;
+        border-radius: 6px;
+        margin-bottom: 2px;
+    }}
+    QListWidget::item:hover {{
+        background: {t['accent_bg']};
+    }}
+    QListWidget::item:selected {{
+        background: {t['accent_bg']};
+        color: {t['accent']};
+    }}
     """
 
 
+# ─── Parsing des blocs de code dans une réponse ──────────────────────────────
+CODE_RE = re.compile(r"```(\w*)\n?(.*?)```", re.DOTALL)
+
+
+def parse_segments(text: str):
+    """Découpe un texte en segments ('text', contenu) / ('code', code, lang)."""
+    segments = []
+    pos = 0
+    for m in CODE_RE.finditer(text):
+        if m.start() > pos:
+            segments.append(("text", text[pos:m.start()]))
+        segments.append(("code", m.group(2), m.group(1) or ""))
+        pos = m.end()
+    if pos < len(text):
+        segments.append(("text", text[pos:]))
+    if not segments:
+        segments.append(("text", text))
+    return segments
+
+
+def escape_html(text: str) -> str:
+    return (
+        text.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+    )
+
+
+# ─── Bloc de code avec bouton copier ──────────────────────────────────────────
+class CodeBlockWidget(QFrame):
+    """Bloc de code façon IA moderne : fond sombre + bouton copier."""
+
+    def __init__(self, code: str, language: str = ""):
+        super().__init__()
+        self.code = code.strip("\n")
+
+        self.setStyleSheet("""
+            QFrame#codeBlock { background: #1e1e1e; border: 1px solid #333333; border-radius: 8px; }
+        """)
+        self.setObjectName("codeBlock")
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+
+        header = QWidget()
+        header.setStyleSheet(
+            "background: #2a2a2a; border-top-left-radius: 8px; "
+            "border-top-right-radius: 8px;"
+        )
+        hlay = QHBoxLayout(header)
+        hlay.setContentsMargins(12, 6, 8, 6)
+
+        lang_lbl = QLabel(language or "code")
+        lang_lbl.setStyleSheet("color: #9aa0a6; font-size: 11px; background: transparent; border: none;")
+
+        self.copy_btn = QPushButton("⧉ Copy")
+        self.copy_btn.setStyleSheet("""
+            QPushButton { color: #cfd3d8; background: transparent; border: none;
+                          font-size: 11px; padding: 2px 6px; }
+            QPushButton:hover { color: #ffffff; }
+        """)
+        self.copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.copy_btn.clicked.connect(self._copy)
+
+        hlay.addWidget(lang_lbl)
+        hlay.addStretch()
+        hlay.addWidget(self.copy_btn)
+
+        body = QPlainTextEdit()
+        body.setReadOnly(True)
+        body.setPlainText(self.code)
+        body.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        body.setStyleSheet("""
+            QPlainTextEdit { background: #1e1e1e; color: #d4d4d4; border: none;
+                              padding: 10px 12px; }
+        """)
+        mono_font = QFont("Consolas")
+        mono_font.setStyleHint(QFont.StyleHint.Monospace)
+        mono_font.setPointSize(10)
+        body.setFont(mono_font)
+
+        line_count = max(1, self.code.count("\n") + 1)
+        line_height = body.fontMetrics().lineSpacing()
+        body.setFixedHeight(min(line_height * line_count + 24, 420))
+
+        lay.addWidget(header)
+        lay.addWidget(body)
+
+    def _copy(self):
+        QApplication.clipboard().setText(self.code)
+        self.copy_btn.setText("✓ Copied")
+        QTimer.singleShot(1500, lambda: self.copy_btn.setText("⧉ Copy"))
+
+
+# ─── Bulle de message (texte + éventuels blocs de code) ──────────────────────
+class MessageBubble(QWidget):
+    def __init__(self, sender: str, text: str, theme: dict):
+        super().__init__()
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 6, 0, 10)
+        lay.setSpacing(6)
+
+        is_assistant = sender.upper() == ASSISTANT_NAME.upper()
+        sender_color = theme["accent"] if is_assistant else theme["text_dim"]
+
+        sender_lbl = QLabel(sender.upper())
+        sender_lbl.setStyleSheet(
+            f"color: {sender_color}; font-weight: 600; font-size: 11px; "
+            "letter-spacing: 1px; background: transparent;"
+        )
+        lay.addWidget(sender_lbl)
+
+        for seg in parse_segments(text):
+            if seg[0] == "text":
+                content = seg[1].strip("\n")
+                if not content.strip():
+                    continue
+                lbl = QLabel(escape_html(content).replace("\n", "<br>"))
+                lbl.setWordWrap(True)
+                lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                lbl.setStyleSheet(
+                    f"color: {theme['text']}; font-size: 13px; background: transparent;"
+                )
+                lay.addWidget(lbl)
+            else:
+                _, code, lang = seg
+                lay.addWidget(CodeBlockWidget(code, lang))
+
+
+# ─── Indicateur "réfléchit..." animé (façon Claude) ───────────────────────────
+class ThinkingWidget(QWidget):
+    def __init__(self, theme: dict):
+        super().__init__()
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 6, 0, 10)
+        lay.setSpacing(6)
+
+        sender_lbl = QLabel(ASSISTANT_NAME.upper())
+        sender_lbl.setStyleSheet(
+            f"color: {theme['text_dim']}; font-weight: 600; font-size: 11px; "
+            "letter-spacing: 1px; background: transparent;"
+        )
+        self._label = QLabel("réfléchit.")
+        self._label.setStyleSheet(
+            f"color: {theme['text_dim']}; font-style: italic; font-size: 13px; background: transparent;"
+        )
+        lay.addWidget(sender_lbl)
+        lay.addWidget(self._label)
+
+        self._dots = 1
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start(450)
+
+    def _tick(self):
+        self._dots = (self._dots % 3) + 1
+        self._label.setText("réfléchit" + "." * self._dots)
+
+    def deleteLater(self):
+        self._timer.stop()
+        super().deleteLater()
+
+
+# ─── Mascotte ────────────────────────────────────────────────────────────────
 class MascotWidget(QLabel):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -158,22 +350,35 @@ class MascotWidget(QLabel):
         pass
 
 
+# ─── Modèle de conversation ────────────────────────────────────────────────
+class Conversation:
+    _counter = 0
+
+    def __init__(self):
+        Conversation._counter += 1
+        self.id = Conversation._counter
+        self.title = "New conversation"
+        self.messages = []        # [(sender, text), ...]
+        self.brain_history = []   # historique format Ollama pour cette conv
+
+
+# ─── Fenêtre principale ───────────────────────────────────────────────────────
 class JarvisWindow(QMainWindow):
-    sig_user_message = pyqtSignal(str)
+    sig_user_message = pyqtSignal(object, str)   # (Conversation, texte)
     sig_close_now = pyqtSignal()
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("REM")
-        self.resize(1100, 700)
+        self.setWindowTitle(ASSISTANT_NAME.upper())
+        self.resize(1300, 720)
 
         self._theme_name = "dark"
         self._current_state = "idle"
         self.voice_enabled = True
 
-        self._messages = []
-        self._thinking = False
-        self._thinking_dots = 1
+        self._conversations = []
+        self._current_conv = None
+        self._thinking_widget = None
 
         self._quitting = False
         self._ready_to_close = False
@@ -181,28 +386,86 @@ class JarvisWindow(QMainWindow):
 
         central = QWidget()
         self.setCentralWidget(central)
-        root = QVBoxLayout(central)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
+        outer = QHBoxLayout(central)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
-        root.addWidget(self._make_top_bar())
+        outer.addWidget(self._make_sidebar())
+
+        right = QWidget()
+        right_lay = QVBoxLayout(right)
+        right_lay.setContentsMargins(0, 0, 0, 0)
+        right_lay.setSpacing(0)
+
+        right_lay.addWidget(self._make_top_bar())
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self._make_mascot_panel())
         splitter.addWidget(self._make_chat_panel())
-        splitter.setSizes([350, 750])
+        splitter.setSizes([320, 780])
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
-        root.addWidget(splitter, 1)
+        right_lay.addWidget(splitter, 1)
 
-        root.addWidget(self._make_input_bar())
+        right_lay.addWidget(self._make_input_bar())
 
-        self._thinking_timer = QTimer(self)
-        self._thinking_timer.timeout.connect(self._tick_thinking)
+        outer.addWidget(right, 1)
 
         self._apply_theme()
         self._start_clock()
 
+        self.new_conversation()
+
+    # ── Sidebar / conversations ─────────────────────────────────────────────
+    def _make_sidebar(self):
+        panel = QWidget()
+        panel.setObjectName("sidebar")
+        panel.setFixedWidth(230)
+        lay = QVBoxLayout(panel)
+        lay.setContentsMargins(14, 16, 14, 16)
+        lay.setSpacing(10)
+
+        new_btn = QPushButton("＋ New chat")
+        new_btn.setObjectName("newChatBtn")
+        new_btn.clicked.connect(self.new_conversation)
+        lay.addWidget(new_btn)
+
+        self._conv_list = QListWidget()
+        self._conv_list.itemClicked.connect(self._on_conv_item_clicked)
+        lay.addWidget(self._conv_list, 1)
+
+        return panel
+
+    def new_conversation(self):
+        conv = Conversation()
+        self._conversations.insert(0, conv)
+        self.switch_conversation(conv)
+        self._refresh_sidebar()
+
+    def _on_conv_item_clicked(self, item):
+        idx = self._conv_list.row(item)
+        if 0 <= idx < len(self._conversations):
+            self.switch_conversation(self._conversations[idx])
+            self._refresh_sidebar()
+
+    def switch_conversation(self, conv: "Conversation"):
+        self._current_conv = conv
+        self._thinking_widget = None
+        self._clear_chat_view()
+        theme = THEMES[self._theme_name]
+        for sender, text in conv.messages:
+            self._chat_add_widget(MessageBubble(sender, text, theme))
+
+    def _refresh_sidebar(self):
+        self._conv_list.blockSignals(True)
+        self._conv_list.clear()
+        for conv in self._conversations:
+            self._conv_list.addItem(conv.title)
+        if self._current_conv in self._conversations:
+            self._conv_list.setCurrentRow(self._conversations.index(self._current_conv))
+        self._conv_list.blockSignals(False)
+
+    # ── Sections ─────────────────────────────────────────────────────────────
     def _make_top_bar(self):
         bar = QFrame()
         bar.setObjectName("topBar")
@@ -210,7 +473,7 @@ class JarvisWindow(QMainWindow):
         lay = QHBoxLayout(bar)
         lay.setContentsMargins(20, 0, 20, 0)
 
-        title = QLabel("REM")
+        title = QLabel(ASSISTANT_NAME.upper())
         title.setObjectName("title")
 
         self._clock = QLabel()
@@ -259,13 +522,22 @@ class JarvisWindow(QMainWindow):
     def _make_chat_panel(self):
         panel = QWidget()
         lay = QVBoxLayout(panel)
-        lay.setContentsMargins(0, 12, 0, 0)
+        lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
 
-        self._chat = QTextBrowser()
-        self._chat.setObjectName("chat")
-        self._chat.setOpenExternalLinks(False)
-        lay.addWidget(self._chat)
+        self._chat_scroll = QScrollArea()
+        self._chat_scroll.setObjectName("chatScroll")
+        self._chat_scroll.setWidgetResizable(True)
+        self._chat_scroll.setFrameShape(QFrame.Shape.NoFrame)
+
+        self._chat_container = QWidget()
+        self._chat_layout = QVBoxLayout(self._chat_container)
+        self._chat_layout.setContentsMargins(16, 12, 16, 12)
+        self._chat_layout.setSpacing(2)
+        self._chat_layout.addStretch(1)
+
+        self._chat_scroll.setWidget(self._chat_container)
+        lay.addWidget(self._chat_scroll)
         return panel
 
     def _make_input_bar(self):
@@ -278,7 +550,7 @@ class JarvisWindow(QMainWindow):
 
         self._input = QLineEdit()
         self._input.setObjectName("input")
-        self._input.setPlaceholderText("Send a message to Rem...")
+        self._input.setPlaceholderText(f"Send a message to {ASSISTANT_NAME}...")
         self._input.returnPressed.connect(self._on_send)
 
         send_btn = QPushButton("Send")
@@ -289,12 +561,13 @@ class JarvisWindow(QMainWindow):
         lay.addWidget(send_btn)
         return bar
 
+    # ── Thème ────────────────────────────────────────────────────────────────
     def _apply_theme(self):
         t = THEMES[self._theme_name]
         self.setStyleSheet(build_stylesheet(t))
         self.mascot.apply_theme(self._theme_name)
-        self._render_chat_stylesheet()
-        self._render_chat()
+        if self._current_conv is not None:
+            self.switch_conversation(self._current_conv)
 
     def _toggle_theme(self):
         self._theme_name = "light" if self._theme_name == "dark" else "dark"
@@ -304,80 +577,64 @@ class JarvisWindow(QMainWindow):
         self.voice_enabled = not self.voice_enabled
         self._voice_btn.setText("🔊 Voice: ON" if self.voice_enabled else "🔇 Voice: OFF")
 
-    def _render_chat_stylesheet(self):
-        t = THEMES[self._theme_name]
-        self._chat.document().setDefaultStyleSheet(f"""
-            .rem {{ color: {t['accent']}; font-weight: 600; }}
-            .you {{ color: {t['text_dim']}; font-weight: 600; }}
-            .msg {{ color: {t['text']}; }}
-            .thinking {{ color: {t['text_dim']}; font-style: italic; }}
-        """)
-
+    # ── Horloge ──────────────────────────────────────────────────────────────
     def _start_clock(self):
         t = QTimer(self)
         t.timeout.connect(lambda: self._clock.setText(datetime.now().strftime("%H:%M:%S")))
         t.start(1000)
         self._clock.setText(datetime.now().strftime("%H:%M:%S"))
 
+    # ── Actions ───────────────────────────────────────────────────────────────
     def _on_send(self):
         text = self._input.text().strip()
         if not text:
             return
         self._input.clear()
-        self.add_message("You", text)
-        self.start_thinking()
+        conv = self._current_conv
+        self.add_message(conv, "You", text)
+        self.start_thinking(conv)
         self.set_state("listening")
-        self.sig_user_message.emit(text)
+        self.sig_user_message.emit(conv, text)
 
-    def add_message(self, sender: str, text: str):
-        self._thinking = False
-        self._thinking_timer.stop()
-        self._messages.append((sender, text))
-        self._render_chat()
+    # ── Chat / rendu ─────────────────────────────────────────────────────────
+    def _chat_add_widget(self, widget):
+        idx = self._chat_layout.count() - 1  # avant le stretch final
+        self._chat_layout.insertWidget(idx, widget)
+        QTimer.singleShot(0, self._scroll_chat_to_bottom)
 
-    def start_thinking(self):
-        self._thinking = True
-        self._thinking_dots = 1
-        self._thinking_timer.start(450)
-        self._render_chat()
+    def _scroll_chat_to_bottom(self):
+        sb = self._chat_scroll.verticalScrollBar()
+        sb.setValue(sb.maximum())
 
-    def stop_thinking(self):
-        self._thinking = False
-        self._thinking_timer.stop()
-        self._render_chat()
+    def _clear_chat_view(self):
+        while self._chat_layout.count() > 1:
+            item = self._chat_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
 
-    def _tick_thinking(self):
-        self._thinking_dots = (self._thinking_dots % 3) + 1
-        self._render_chat()
+    def add_message(self, conv: "Conversation", sender: str, text: str):
+        conv.messages.append((sender, text))
 
-    def _escape(self, text: str) -> str:
-        return (
-            text.replace("&", "&amp;")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;")
-                .replace("\n", "<br>")
-        )
+        if conv.title == "New conversation" and sender.upper() == "YOU":
+            conv.title = (text[:30] + "…") if len(text) > 30 else text
+            self._refresh_sidebar()
 
-    def _render_chat(self):
-        blocks = []
-        for sender, text in self._messages:
-            css_class = "rem" if sender.upper() == "REM" else "you"
-            blocks.append(
-                f'<p><span class="{css_class}">{sender.upper()}</span><br>'
-                f'<span class="msg">{self._escape(text)}</span></p>'
-            )
+        if conv is self._current_conv:
+            if self._thinking_widget is not None:
+                self._thinking_widget.deleteLater()
+                self._thinking_widget = None
+            self._chat_add_widget(MessageBubble(sender, text, THEMES[self._theme_name]))
 
-        if self._thinking:
-            dots = "." * self._thinking_dots
-            blocks.append(
-                '<p><span class="rem">REM</span><br>'
-                f'<span class="thinking">réfléchit{dots}</span></p>'
-            )
+    def start_thinking(self, conv: "Conversation"):
+        if conv is self._current_conv:
+            self._thinking_widget = ThinkingWidget(THEMES[self._theme_name])
+            self._chat_add_widget(self._thinking_widget)
 
-        self._chat.setHtml("".join(blocks))
-        self._chat.verticalScrollBar().setValue(
-            self._chat.verticalScrollBar().maximum()
-        )
+    def stop_thinking(self, conv: "Conversation"):
+        if conv is self._current_conv and self._thinking_widget is not None:
+            self._thinking_widget.deleteLater()
+            self._thinking_widget = None
 
     def set_state(self, state: str):
         self._current_state = state
@@ -389,6 +646,7 @@ class JarvisWindow(QMainWindow):
         }
         self._state_lbl.setText(labels.get(state, "STANDBY"))
 
+    # ── Fermeture avec message d'adieu ─────────────────────────────────────────
     def closeEvent(self, event):
         if self._ready_to_close:
             event.accept()
@@ -401,7 +659,8 @@ class JarvisWindow(QMainWindow):
         self._quitting = True
         self._input.setEnabled(False)
         self._quit_btn.setEnabled(False)
-        self.stop_thinking()
+        conv = self._current_conv
+        self.stop_thinking(conv)
         self.set_state("speaking" if self.voice_enabled else "idle")
 
         if self.voice_enabled:
@@ -412,7 +671,7 @@ class JarvisWindow(QMainWindow):
             def on_synth_done(ok: bool):
                 if synth_worker in self._active_workers:
                     self._active_workers.remove(synth_worker)
-                self.add_message("Rem", GOODBYE_TEXT)
+                self.add_message(conv, ASSISTANT_NAME, GOODBYE_TEXT)
 
                 import threading
                 from core.voice import play
@@ -425,28 +684,31 @@ class JarvisWindow(QMainWindow):
             synth_worker.done.connect(on_synth_done)
             synth_worker.start()
         else:
-                self.add_message("Rem", GOODBYE_TEXT)
+            self.add_message(conv, ASSISTANT_NAME, GOODBYE_TEXT)
+            QTimer.singleShot(700, self.sig_close_now.emit)
 
     def _do_close_now(self):
         self._ready_to_close = True
         self.close()
 
 
+# ─── Worker thread pour brain.py ──────────────────────────────────────────────
 class BrainWorker(QThread):
     response_ready = pyqtSignal(str)
 
-    def __init__(self, message: str):
+    def __init__(self, message: str, historique: list):
         super().__init__()
         self.message = message
+        self.historique = historique
 
     def run(self):
         from core.brain import demander
-        reponse = demander(self.message)
+        reponse = demander(self.message, self.historique)
         self.response_ready.emit(reponse)
 
 
+# ─── Worker thread pour la synthèse vocale (sans lecture) ────────────────────
 class VoiceSynthWorker(QThread):
-    """Génère l'audio (Piper) sans le jouer, pour synchroniser texte et voix."""
     done = pyqtSignal(bool)
 
     def __init__(self, text: str):
@@ -459,14 +721,15 @@ class VoiceSynthWorker(QThread):
         self.done.emit(ok)
 
 
+# ─── Lancement ────────────────────────────────────────────────────────────────
 def launch():
     app = QApplication(sys.argv)
     win = JarvisWindow()
 
     win._active_workers = []
 
-    def on_user_message(text: str):
-        worker = BrainWorker(text)
+    def on_user_message(conv, text: str):
+        worker = BrainWorker(text, conv.brain_history)
         win._active_workers.append(worker)
 
         def cleanup():
@@ -474,8 +737,6 @@ def launch():
                 win._active_workers.remove(worker)
 
         def on_response(reponse: str):
-            win.stop_thinking()
-
             if win.voice_enabled:
                 synth_worker = VoiceSynthWorker(reponse)
                 win._active_workers.append(synth_worker)
@@ -483,7 +744,8 @@ def launch():
                 def on_synth_done(ok: bool):
                     if synth_worker in win._active_workers:
                         win._active_workers.remove(synth_worker)
-                    win.add_message("Rem", reponse)
+                    win.stop_thinking(conv)
+                    win.add_message(conv, ASSISTANT_NAME, reponse)
                     win.set_state("speaking")
 
                     import threading
@@ -497,7 +759,8 @@ def launch():
                 synth_worker.done.connect(on_synth_done)
                 synth_worker.start()
             else:
-                win.add_message("Rem", reponse)
+                win.stop_thinking(conv)
+                win.add_message(conv, ASSISTANT_NAME, reponse)
                 win.set_state("idle")
 
         worker.response_ready.connect(on_response)
@@ -507,6 +770,7 @@ def launch():
     win.sig_user_message.connect(on_user_message)
 
     welcome = "Welcome sir. Systems online. How can I assist you today?"
+    conv = win._current_conv
 
     if win.voice_enabled:
         welcome_worker = VoiceSynthWorker(welcome)
@@ -515,7 +779,7 @@ def launch():
         def on_welcome_synth(ok: bool):
             if welcome_worker in win._active_workers:
                 win._active_workers.remove(welcome_worker)
-            win.add_message("Rem", welcome)
+            win.add_message(conv, ASSISTANT_NAME, welcome)
 
             import threading
             from core.voice import play
@@ -529,7 +793,8 @@ def launch():
         welcome_worker.done.connect(on_welcome_synth)
         welcome_worker.start()
     else:
-            win.add_message("Rem", welcome)
+        win.add_message(conv, ASSISTANT_NAME, welcome)
+
     win.show()
     sys.exit(app.exec())
 
