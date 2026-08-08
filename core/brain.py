@@ -25,16 +25,28 @@ You exist to assist the user like a high-level personal AI system.
 """
 
 
-def demander(message_utilisateur, historique):
+def demander(message_utilisateur, historique, contexte_recherche=""):
     """
     historique : liste de messages au format Ollama (role/content) propre
-    à UNE conversation. Elle est modifiée sur place (on y ajoute le message
-    utilisateur puis la réponse), ce qui permet d'avoir un historique
-    différent par conversation plutôt qu'une seule mémoire globale partagée.
+    à UNE conversation. Elle est modifiée sur place.
+
+    contexte_recherche : extraits de résultats de recherche web (optionnel).
+    Si fourni, il est injecté avec la question pour que Rem puisse s'appuyer
+    dessus pour répondre.
     """
+    if contexte_recherche:
+        contenu = (
+            f"[Web search context]\n{contexte_recherche}\n\n"
+            f"User question: {message_utilisateur}\n"
+            "Use the context above if it is relevant to answer accurately, "
+            "and mention naturally that it comes from a web search."
+        )
+    else:
+        contenu = message_utilisateur
+
     historique.append({
         "role": "user",
-        "content": message_utilisateur
+        "content": contenu
     })
 
     reponse = ollama.chat(

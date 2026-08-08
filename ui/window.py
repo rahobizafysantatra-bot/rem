@@ -15,8 +15,11 @@ from PyQt6.QtWidgets import (
     QLabel, QLineEdit, QPushButton, QSplitter, QFrame, QSizePolicy,
     QScrollArea, QListWidget, QPlainTextEdit
 )
-from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QSize
-from PyQt6.QtGui import QMovie, QFont, QSyntaxHighlighter, QTextCharFormat, QColor
+from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QSize, QUrl
+from PyQt6.QtGui import (
+    QMovie, QFont, QSyntaxHighlighter, QTextCharFormat, QColor,
+    QPixmap, QDesktopServices
+)
 
 
 # ─── Emplacement des assets de la mascotte ─────────────────────────────────
@@ -126,6 +129,10 @@ def build_stylesheet(t: dict) -> str:
         text-align: left;
         font-weight: 600;
     }}
+    QWidget#webPanel {{
+        background: {t['bg_alt']};
+        border-left: 1px solid {t['border']};
+    }}
     QSplitter::handle {{
         background: {t['border']};
         width: 1px;
@@ -178,6 +185,21 @@ def escape_html(text: str) -> str:
             .replace("<", "&lt;")
             .replace(">", "&gt;")
     )
+
+
+class ClickableLabel(QLabel):
+    """QLabel qui ouvre une URL dans le navigateur par défaut au clic."""
+
+    def __init__(self, text: str, url: str = "", *args, **kwargs):
+        super().__init__(text, *args, **kwargs)
+        self._url = url
+        if url:
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mousePressEvent(self, event):
+        if self._url:
+            QDesktopServices.openUrl(QUrl(self._url))
+        super().mousePressEvent(event)
 
 
 # ─── Coloration syntaxique façon VS Code Dark+ ───────────────────────────────
@@ -472,7 +494,7 @@ class Conversation:
 
 # ─── Fenêtre principale ───────────────────────────────────────────────────────
 class JarvisWindow(QMainWindow):
-    sig_user_message = pyqtSignal(object, str)   # (Conversation, texte)
+    sig_user_message = pyqtSignal(object, str, str)   # (Conversation, texte, contexte_recherche)
     sig_close_now = pyqtSignal()
 
     def __init__(self):
@@ -483,6 +505,8 @@ class JarvisWindow(QMainWindow):
         self._theme_name = "dark"
         self._current_state = "idle"
         self.voice_enabled = True
+        self.web_search_enabled = False
+        self._active_workers = []
 
         self._conversations = []
         self._current_conv = None
@@ -510,9 +534,11 @@ class JarvisWindow(QMainWindow):
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self._make_mascot_panel())
         splitter.addWidget(self._make_chat_panel())
-        splitter.setSizes([320, 780])
+        splitter.addWidget(self._make_web_panel())
+        splitter.setSizes([320, 780, 320])
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
+        splitter.setStretchFactor(2, 0)
         right_lay.addWidget(splitter, 1)
 
         right_lay.addWidget(self._make_input_bar())
@@ -522,6 +548,7 @@ class JarvisWindow(QMainWindow):
         self._apply_theme()
         self._start_clock()
 
+        self.web_panel.setVisible(False)
         self.new_conversation()
 
     # ── Sidebar / conversations ─────────────────────────────────────────────
@@ -594,6 +621,10 @@ class JarvisWindow(QMainWindow):
         self._voice_btn.setFixedWidth(120)
         self._voice_btn.clicked.connect(self._toggle_voice)
 
+        self._web_btn = QPushButton("🌐 Web: OFF")
+        self._web_btn.setFixedWidth(110)
+        self._web_btn.clicked.connect(self._toggle_web_search)
+
         self._quit_btn = QPushButton("⏻ Quit")
         self._quit_btn.setObjectName("quitBtn")
         self._quit_btn.setFixedWidth(90)
@@ -604,6 +635,8 @@ class JarvisWindow(QMainWindow):
         lay.addWidget(self._clock)
         lay.addSpacing(16)
         lay.addWidget(self._voice_btn)
+        lay.addSpacing(8)
+        lay.addWidget(self._web_btn)
         lay.addSpacing(8)
         lay.addWidget(self._theme_btn)
         lay.addSpacing(8)
@@ -647,6 +680,166 @@ class JarvisWindow(QMainWindow):
         self._chat_scroll.setWidget(self._chat_container)
         lay.addWidget(self._chat_scroll)
         return panel
+
+    def _make_web_panel(self):
+        self.web_panel = QWidget()
+        self.web_panel.setObjectName("webPanel")
+        self.web_panel.setMinimumWidth(260)
+        outer = QVBoxLayout(self.web_panel)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        header = QLabel("🌐 WEB RESULTS")
+        header.setObjectName("webHeader")
+        header.setStyleSheet(
+            "font-weight: 600; font-size: 11px; letter-spacing: 1px; "
+            "padding: 16px 16px 8px 16px; background: transparent;"
+        )
+        outer.addWidget(header)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+
+        container = QWidget()
+        self._web_layout = QVBoxLayout(container)
+        self._web_layout.setContentsMargins(16, 4, 16, 16)
+        self._web_layout.setSpacing(16)
+
+        self._web_status_lbl = QLabel("")
+        self._web_status_lbl.setWordWrap(True)
+        self._web_status_lbl.setStyleSheet("font-size: 12px; font-style: italic; background: transparent;")
+        self._web_layout.addWidget(self._web_status_lbl)
+        self._web_layout.addStretch(1)
+
+        scroll.setWidget(container)
+        outer.addWidget(scroll)
+        return self.web_panel
+
+    def _toggle_web_search(self):
+        self.web_search_enabled = not self.web_search_enabled
+        self._web_btn.setText("🌐 Web: ON" if self.web_search_enabled else "🌐 Web: OFF")
+        self.web_panel.setVisible(self.web_search_enabled)
+
+    def set_web_status(self, text: str):
+        self._web_status_lbl.setText(text)
+
+    def _web_add_widget(self, widget):
+        idx = self._web_layout.count() - 1  # avant le stretch final
+        self._web_layout.insertWidget(idx, widget)
+
+    def _clear_web_results(self):
+        # garde le label de statut (index 0) et le stretch final
+        while self._web_layout.count() > 2:
+            item = self._web_layout.takeAt(1)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+
+    def _make_section_label(self, text: str):
+        lbl = QLabel(text)
+        t = THEMES[self._theme_name]
+        lbl.setStyleSheet(
+            f"font-size: 10px; font-weight: 700; letter-spacing: 1px; "
+            f"color: {t['text_dim']}; background: transparent;"
+        )
+        return lbl
+
+    def _make_link_card(self, title: str, url: str, prefix: str = ""):
+        t = THEMES[self._theme_name]
+        card = QWidget()
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(2)
+
+        title_lbl = ClickableLabel(f"{prefix}{title or url}", url)
+        title_lbl.setWordWrap(True)
+        title_lbl.setStyleSheet(
+            f"font-size: 12px; font-weight: 600; color: {t['accent']}; "
+            "background: transparent; text-decoration: underline;"
+        )
+        lay.addWidget(title_lbl)
+
+        url_lbl = QLabel(url)
+        url_lbl.setWordWrap(True)
+        url_lbl.setStyleSheet(f"font-size: 10px; color: {t['text_dim']}; background: transparent;")
+        lay.addWidget(url_lbl)
+        return card
+
+    def _make_image_card(self, title: str, thumb_url: str, page_url: str):
+        t = THEMES[self._theme_name]
+        card = QWidget()
+        lay = QHBoxLayout(card)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
+
+        thumb_lbl = QLabel()
+        thumb_lbl.setFixedSize(56, 56)
+        thumb_lbl.setScaledContents(True)
+        thumb_lbl.setStyleSheet("background: rgba(128,128,128,0.15); border-radius: 6px;")
+        lay.addWidget(thumb_lbl)
+
+        text_lbl = ClickableLabel(title or "Image", page_url)
+        text_lbl.setWordWrap(True)
+        text_lbl.setStyleSheet(f"font-size: 12px; color: {t['text']}; background: transparent;")
+        lay.addWidget(text_lbl, 1)
+
+        if thumb_url:
+            worker = ImageThumbWorker(thumb_url)
+            self._active_workers.append(worker)
+
+            def on_thumb(data: bytes):
+                if worker in self._active_workers:
+                    self._active_workers.remove(worker)
+                if data:
+                    pix = QPixmap()
+                    if pix.loadFromData(data):
+                        thumb_lbl.setPixmap(pix)
+
+            worker.done.connect(on_thumb)
+            worker.start()
+
+        return card
+
+    def populate_web_results(self, result: dict):
+        self._clear_web_results()
+        self.set_web_status("")
+
+        texts = result.get("text") or []
+        images = result.get("images") or []
+        videos = result.get("videos") or []
+
+        if not texts and not images and not videos:
+            self.set_web_status("No results found.")
+            return
+
+        if texts:
+            self._web_add_widget(self._make_section_label("LINKS"))
+            for r in texts[:5]:
+                self._web_add_widget(self._make_link_card(r.get("title", ""), r.get("href", "")))
+
+        if images:
+            self._web_add_widget(self._make_section_label("IMAGES"))
+            for r in images[:5]:
+                self._web_add_widget(self._make_image_card(
+                    r.get("title", ""), r.get("thumbnail", ""), r.get("image", r.get("url", ""))
+                ))
+
+        if videos:
+            self._web_add_widget(self._make_section_label("VIDEOS"))
+            for r in videos[:4]:
+                self._web_add_widget(self._make_link_card(
+                    r.get("title", ""), r.get("content", r.get("url", "")), prefix="▶ "
+                ))
+
+    def _build_search_context(self, result: dict) -> str:
+        lines = []
+        for r in (result.get("text") or [])[:3]:
+            title = r.get("title", "")
+            body = r.get("body", "")
+            if title or body:
+                lines.append(f"- {title}: {body}")
+        return "\n".join(lines)
 
     def _make_input_bar(self):
         bar = QFrame()
@@ -702,7 +895,25 @@ class JarvisWindow(QMainWindow):
         self.add_message(conv, "You", text)
         self.start_thinking(conv)
         self.set_state("listening")
-        self.sig_user_message.emit(conv, text)
+
+        if self.web_search_enabled:
+            self._clear_web_results()
+            self.set_web_status("Searching the web…")
+
+            search_worker = WebSearchWorker(text)
+            self._active_workers.append(search_worker)
+
+            def on_search_done(result: dict):
+                if search_worker in self._active_workers:
+                    self._active_workers.remove(search_worker)
+                self.populate_web_results(result)
+                contexte = self._build_search_context(result)
+                self.sig_user_message.emit(conv, text, contexte)
+
+            search_worker.done.connect(on_search_done)
+            search_worker.start()
+        else:
+            self.sig_user_message.emit(conv, text, "")
 
     # ── Chat / rendu ─────────────────────────────────────────────────────────
     def _chat_add_widget(self, widget):
@@ -800,18 +1011,58 @@ class JarvisWindow(QMainWindow):
         self.close()
 
 
+# ─── Worker thread pour la recherche web ──────────────────────────────────────
+class WebSearchWorker(QThread):
+    """Lance une recherche web (texte + images + vidéos) via DuckDuckGo."""
+    done = pyqtSignal(dict)
+
+    def __init__(self, query: str):
+        super().__init__()
+        self.query = query
+
+    def run(self):
+        from core.websearch import search_text, search_images, search_videos
+        result = {
+            "text": search_text(self.query, max_results=5),
+            "images": search_images(self.query, max_results=6),
+            "videos": search_videos(self.query, max_results=4),
+        }
+        self.done.emit(result)
+
+
+class ImageThumbWorker(QThread):
+    """Télécharge les octets d'une image (miniature) pour l'afficher dans le panneau web."""
+    done = pyqtSignal(bytes)
+
+    def __init__(self, url: str):
+        super().__init__()
+        self.url = url
+
+    def run(self):
+        data = b""
+        try:
+            import urllib.request
+            req = urllib.request.Request(self.url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=6) as resp:
+                data = resp.read()
+        except Exception as e:
+            print("Erreur téléchargement miniature :", e)
+        self.done.emit(data)
+
+
 # ─── Worker thread pour brain.py ──────────────────────────────────────────────
 class BrainWorker(QThread):
     response_ready = pyqtSignal(str)
 
-    def __init__(self, message: str, historique: list):
+    def __init__(self, message: str, historique: list, contexte: str = ""):
         super().__init__()
         self.message = message
         self.historique = historique
+        self.contexte = contexte
 
     def run(self):
         from core.brain import demander
-        reponse = demander(self.message, self.historique)
+        reponse = demander(self.message, self.historique, self.contexte)
         self.response_ready.emit(reponse)
 
 
@@ -836,8 +1087,8 @@ def launch():
 
     win._active_workers = []
 
-    def on_user_message(conv, text: str):
-        worker = BrainWorker(text, conv.brain_history)
+    def on_user_message(conv, text: str, contexte: str):
+        worker = BrainWorker(text, conv.brain_history, contexte)
         win._active_workers.append(worker)
 
         def cleanup():
